@@ -1,0 +1,5 @@
+.vscode
+.streamlit
+.venv
+/deprecated/*
+/__pycache__/*

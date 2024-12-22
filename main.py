@@ -75,7 +75,7 @@ def query_refiner(conversation: str, query: str) -> str:
     response = openai_client.chat.completions.create(
         model=config.DEFAULT_MODEL,
         messages=[
-            {"role": "system", "content": "Refina consultas basándote en el contexto del historial de conversación."},
+            {"role": "system", "content": "Eres un experto en parrillas uruguayas. Refina las consultas del usuario basándote en el contexto del historial de conversación."},
             {"role": "user", "content": f"CONVERSATION LOG: \n{conversation}\n\nQuery: {query}\n\nRefined Query:"}
         ],
         temperature=0.1,

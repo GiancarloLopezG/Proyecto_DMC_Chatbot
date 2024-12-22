@@ -1,5 +1,7 @@
 .vscode
-.streamlit
 .venv
+secrets_test.toml
+/deprecated
 /deprecated/*
+/__pycache__
 /__pycache__/*

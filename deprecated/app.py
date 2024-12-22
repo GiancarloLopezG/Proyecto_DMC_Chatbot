@@ -13,7 +13,6 @@ from langchain.prompts import (
     MessagesPlaceholder
 )
 from streamlit_chat import message
-from openai import OpenAI
 from pinecone import Pinecone
 from PIL import Image
 
@@ -21,10 +20,8 @@ from PIL import Image
 @dataclass
 class Config:
     """Application configuration parameters."""
-    PINECONE_INDEX_NAME: str = st.secrets["pinecone"]["index_name"]
-    PINECONE_API_KEY: str = st.secrets["pinecone"]["api_key"]
-    OPENAI_API_KEY: str = st.secrets["openai"]["api_key"]
-    OPENAI_EMBEDDING_MODEL_NAME : str = st.secrets["openai"]["embedding_model_name"]
+    PINECONE_INDEX_NAME: str = "proyecto-dmc"
+    PINECONE_API_KEY: str = st.secrets("PINECONE_API_KEY")
     AVAILABLE_MODELS: List[str] = field(default_factory=lambda: ['gpt-3.5-turbo', 'gpt-3.5-turbo-16k', 'gpt-4'])
     DEFAULT_MODEL: str = "gpt-3.5-turbo"
     SYSTEM_PROMPT: str = """
@@ -35,45 +32,31 @@ class Config:
 
 # Instanciación de objetos necesarios
 config = Config()
-pinecone_client = Pinecone(api_key=config.PINECONE_API_KEY)
-index = pinecone_client.Index(name=config.PINECONE_INDEX_NAME)
-openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+pinecone_client = Pinecone(config.PINECONE_API_KEY)
+index = pinecone_client.Index(config.PINECONE_INDEX_NAME)
+openai_client = openai.OpenAI()
 
-# Configuración del modelo
-llm_model = ChatOpenAI(model_name=config.DEFAULT_MODEL, openai_api_key=config.OPENAI_API_KEY)
-system_msg_template = SystemMessagePromptTemplate.from_template(template=config.SYSTEM_PROMPT)
-human_msg_template = HumanMessagePromptTemplate.from_template(template="{input}")
-prompt_template = ChatPromptTemplate.from_messages([
-    system_msg_template,
-    MessagesPlaceholder(variable_name="history"),
-    human_msg_template
-])
-conversation = ConversationChain(
-    memory=ConversationBufferWindowMemory(k=3, return_messages=True),
-    prompt=prompt_template,
-    llm=llm_model,
-    verbose=True
-)
+
 
 # Funciones auxiliares
-def find_match(query: str) -> str:
+def find_match(query: str, openai_client:openai.OpenAI, pinecone_index:Pinecone.Index) -> str:
     """Busca los mejores resultados en Pinecone para el query dado."""
     response = openai_client.embeddings.create(
-        model=config.OPENAI_EMBEDDING_MODEL_NAME,
+        model="text-embedding-ada-002",
         input=query
     )
     query_embedding = response.data[0].embedding
-    results = index.query(
+    results = pinecone_index.query(
         vector=query_embedding,
         top_k=3,
         include_metadata=True
     )
     return "\n".join([result["metadata"]["text"] for result in results["matches"]])
 
-def query_refiner(conversation: str, query: str) -> str:
+def query_refiner(conversation: str, query: str, openai_client:openai.OpenAI) -> str:
     """Refina la consulta basándose en el historial de conversación."""
     response = openai_client.chat.completions.create(
-        model=config.DEFAULT_MODEL,
+        model="gpt-3.5-turbo",  # Puedes cambiar al modelo que prefieras
         messages=[
             {"role": "system", "content": "Refina consultas basándote en el contexto del historial de conversación."},
             {"role": "user", "content": f"CONVERSATION LOG: \n{conversation}\n\nQuery: {query}\n\nRefined Query:"}
@@ -101,6 +84,9 @@ if 'responses' not in st.session_state:
 if 'requests' not in st.session_state:
     st.session_state['requests'] = []
 
+if 'buffer_memory' not in st.session_state:
+    st.session_state.buffer_memory = ConversationBufferWindowMemory(k=3, return_messages=True)
+
 # Configuración de la página
 st.set_page_config(
     page_title="Experto parrillas uruguayas 🍖🥩",
@@ -109,15 +95,34 @@ st.set_page_config(
 
 # Sidebar
 with st.sidebar:
-    st.title("Configuración de la API de OpenAI")
+    st.title("Configuración de la API de OpenaAI")
+    openai_api_key = st.text_input("Ingrese tu API Key de OpenAI y dale Enter para habilitar el chatbot", key="chatbot_api_key", type="password")
     llm_model_name = st.selectbox(
-        'Elige el modelo',
-        config.AVAILABLE_MODELS,
-        key="model",
-        index=config.AVAILABLE_MODELS.index(config.DEFAULT_MODEL)
+        'Eliga el modelo',
+        ('gpt-3.5-turbo', 'gpt-3.5-turbo-16k', 'gpt-4'),
+        key="model"
     )
     image = Image.open('parrilla.jpeg')
     st.image(image, caption='OpenAI, Langchain y Streamlit')
+    st.markdown("Integrando OpenAI con Streamlit y Langchain.")
+
+# Configuración del modelo
+if llm_model_name and openai_api_key:
+    openai_client.api_key = openai_api_key
+    llm_model = ChatOpenAI(model_name=llm_model_name, openai_api_key=openai_api_key)
+    system_msg_template = SystemMessagePromptTemplate.from_template(template=config.SYSTEM_PROMPT)
+    human_msg_template = HumanMessagePromptTemplate.from_template(template="{input}")
+    prompt_template = ChatPromptTemplate.from_messages([
+        system_msg_template,
+        MessagesPlaceholder(variable_name="history"),
+        human_msg_template
+    ])
+    conversation = ConversationChain(
+        memory=st.session_state.buffer_memory,
+        prompt=prompt_template,
+        llm=llm_model,
+        verbose=True
+    )
 
 # Interfaz principal
 st.subheader("Chatbot con Langchain, ChatGPT, Pinecone y Streamlit")
@@ -131,10 +136,10 @@ with text_container:
     if query:
         with st.spinner("Escribiendo respuesta..."):
             conversation_string = get_conversation_string()
-            refined_query = query_refiner(conversation_string, query)
+            refined_query = query_refiner(conversation_string, query, openai_client)
             st.subheader("Consulta refinada:")
             st.write(refined_query)
-            context = find_match(refined_query)
+            context = find_match(refined_query,openai_client,index)
             response = conversation.predict(input=f"Context:\n{context}\n\nQuery:\n{query}")
         st.session_state.requests.append(query)
         st.session_state.responses.append(response)
